@@ -120,6 +120,9 @@ class ContextManager:
     def set_latest_usage(self, usage: TokenUsage):
         self._latest_usage = usage
 
+    def get_latest_usage(self) -> TokenUsage:
+        return self._latest_usage
+
     def add_usage(self, usage: TokenUsage):
         self.total_usage += usage
 

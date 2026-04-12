@@ -21,6 +21,10 @@ class Agent:
         self.session.approval_manager.confirmation_callback = confirmation_callback
 
     async def run(self, message: str):
+
+        # create fresh session for request
+        self.session = Session(self.config)
+        await self.session.initialize()
         
         await self.session.hook_system.trigger_before_agent(message)
         yield AgentEvent.agent_start(message)
@@ -54,7 +58,10 @@ class Agent:
             success=final_response is not None
         )
         
-        yield AgentEvent.agent_end(final_response)
+        yield AgentEvent.agent_end(
+            final_response,
+            usage=self.session.context_manager.get_latest_usage()
+        )
 
     async def _agentic_loop(self) -> AsyncGenerator[AgentEvent, None]:
         max_turns = self.config.max_turns
@@ -219,9 +226,8 @@ class Agent:
         exc_val,
         exc_tb,
     ) -> None:
-        if self.session and self.session.client and self.session.mcp_manager:
+        if self.session and self.session.client:
             await self.session.client.close()
-            await self.session.mcp_manager.shutdown()
             # Cleanup MLflow run
             self.session.cleanup()
             self.session = None

@@ -8,7 +8,8 @@ platformdirs
 openai
 ddgs
 tiktoken
-fastmcp
-opensearch-py
-sentence-transformers
-qdrant-client
+rich
+click
+duckdb
+fastapi
+
