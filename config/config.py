@@ -140,37 +140,15 @@ class Config(BaseModel):
 
         return errors
     
+       
     @property
-    def jina_api_key(self) -> str | None:
-        return os.environ.get("JINA_API_KEY")
+    def iam_jwks_url(self):
+        return os.environ.get("IAM_JWKS_URL", "https://iam.drgodly.com/api/auth/jwks")
 
     @property
-    def jina_api_url(self) -> str:
-        return os.environ.get("JINA_BASE_URL","https://api.jina.ai/v1/embeddings")
+    def iam_issuer(self):
+        return os.environ.get("IAM_ISSUER", "https://iam.drgodly.com")
 
-    @property
-    def jina_model(self) -> str:
-        return os.environ.get("JINA_MODEL", "jina-embeddings-v3")
-
-    @property
-    def jina_dimensions(self) -> int:
-        return int(os.environ.get("JINA_DIMENSIONS", "1024"))
-
-    @property
-    def opensearch_host(self) -> str:
-        return os.environ.get("OPENSEARCH_HOST", "localhost")
-
-    @property
-    def opensearch_port(self) -> int:
-        return int(os.environ.get("OPENSEARCH_PORT", "9200"))
-
-    @property
-    def opensearch_user(self) -> str:
-        return os.environ.get("OPENSEARCH_USER", "admin")
-
-    @property
-    def opensearch_password(self) -> str:
-        return os.environ.get("OPENSEARCH_PASSWORD", None)
 
     @property
     def opensearch_ssl(self) -> bool:
@@ -188,24 +166,6 @@ class Config(BaseModel):
     def mlflow_experiment_name(self) -> str:
         return os.environ.get("MLFLOW_EXPERIMENT_NAME", "AIAgent")
 
-    @property
-    def qdrant_url(self) -> str:
-        return os.environ.get("QDRANT_URL", "http://localhost:6333")
-
-    @property
-    def qdrant_api_key(self) -> str:
-        return os.environ.get("QDRANT_API_KEY", None)
-
-    @property
-    def qdrant_collection(self) -> str:
-        return os.environ.get("QDRANT_COLLECTION", "arxiv-papers-chunks")
-
-    @property
-    def sentence_transformer_model(self) -> str:
-        return os.environ.get(
-            "SENTENCE_TRANSFORMER_MODEL",
-            "sentence-transformers/all-MiniLM-L6-v2"
-        )
     
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 from typing import Any
 import uuid
+from contextlib import asynccontextmanager
 from client.llm_client import LLMClient
 from config.config import Config
 from config.loader import get_data_dir
@@ -14,9 +15,13 @@ from tools.discovery import ToolDiscoveryManager
 from tools.registry import create_default_registry
 from utils.mlflow_tracker import get_mlflow_tracker
 from typing import List, Dict, Any, Optional
+import asyncio
+import mlflow
+
 
 class Session:
     def __init__(self, config: Config):
+
         self.config = config
         self.client = LLMClient(config=config)
         self.tool_registry = create_default_registry(config=config)
@@ -25,23 +30,79 @@ class Session:
             self.config,
             self.tool_registry,
         )
-    
         self.chat_compactor = ChatCompactor(self.client)
+      
+        self.pending_approvals = {}
+        self.event_queue: asyncio.Queue = asyncio.Queue()
         self.approval_manager = ApprovalManager(
             self.config.approval,
             self.config.cwd,
+            confirmation_callback=self._request_user_confirmation,
         )
-    
+
         # Add global MLflow tracker
-        self.mlflow_tracker = get_mlflow_tracker(config)
+        self.mlflow_tracker = get_mlflow_tracker()
+        self.mlflow_run = None
         self.loop_detector = LoopDetector()
-        self.hook_system = HookSystem(config)
+        self.hook_system = HookSystem(self.config)
         self.session_id = str(uuid.uuid4())
         self.created_at = datetime.now()
         self.updated_at = datetime.now()
-
         self.turn_count = 0
-        self.mlflow_run_id: Optional[str] = None
+
+    async def _request_user_confirmation(self, confirmation):
+
+        print("DEBUG: _request_user_confirmation START")
+        approval_id = str(uuid.uuid4())
+
+        future = asyncio.get_running_loop().create_future()
+
+        self.pending_approvals[approval_id] = future
+        print("WAITING APPROVAL:", approval_id)
+
+        # send approval event to frontend
+        await self.event_queue.put({
+            "type": "approval_request",
+            "data": {
+                "approval_id": approval_id,
+                "tool_name": confirmation.tool_name,
+                "description": confirmation.description,
+                "params": confirmation.params
+            }
+        })
+
+        try:
+            # Code stops here until the /approve route calls future.set_result()
+            approved = await future
+            print(f"DEBUG: Approval result received for {approval_id}: {approved}")
+            return approved
+        finally:
+            # Ensure we ALWAYS clean up the dictionary, even if there's an error
+            if approval_id in self.pending_approvals:
+                del self.pending_approvals[approval_id]
+
+    async def handle_approval(self, approval_id: str, approved: bool) -> bool:
+        """
+        This is the 'Resolver'. It is called by the WebSocket or API 
+        when the user actually clicks 'Approve' or 'Deny'.
+        """
+        if approval_id in self.pending_approvals:
+            future = self.pending_approvals[approval_id]
+            if not future.done():
+                # This 'wakes up' the _request_user_confirmation method above
+                future.set_result(approved)
+                return True
+        
+        print(f"DEBUG: Could not find pending approval for ID: {approval_id}")
+        return False
+
+    @property
+    def turn_count(self) -> int:
+        return getattr(self, '_turn_count', 0)
+    
+    @turn_count.setter
+    def turn_count(self, value: int) -> None:
+        self._turn_count = value
 
     async def initialize(self) -> None:
         
@@ -52,10 +113,17 @@ class Session:
             tools=self.tool_registry.get_tools(),
         )
         
-        # Setup MLflow run for this session
-        self.mlflow_run_id = self.mlflow_tracker.start_run(self.session_id)
+        # Setup MLflow run for this session (optional)
+        try:
+            if mlflow.active_run():
+                mlflow.end_run()
+            self.mlflow_run = self.mlflow_tracker.start_run("initializing")
+        except Exception as e:
+            print(f"Warning: MLflow tracking disabled: {e}")
+            self.mlflow_run = None
+       
         # Set session ID for trace tracking
-        if self.mlflow_tracker.enabled:
+        if self.mlflow_tracker:
             self.mlflow_tracker.current_session_id = self.session_id
 
     def _load_memory(self) -> str | None:
@@ -98,63 +166,41 @@ class Session:
             # "mlflow_stats": self.mlflow_tracker.get_session_stats()
         }
 
+        
 
-    def track_agent_interaction(
-        self,
-        user_message: str,
-        agent_response: str,
-        tools_used: List[str],
-        session_duration: float,
-        token_usage: Optional[Dict[str, int]] = None,
-        success: bool = True
-    ):
-        """Track agent interaction using MLflow."""
-        if self.mlflow_tracker:
-            self.mlflow_tracker.log_agent_interaction(
-                user_message=user_message,
-                agent_response=agent_response,
-                tools_used=tools_used,
-                session_duration=session_duration,
-                token_usage=token_usage,
-                success=success
-            )
+    @asynccontextmanager
+    async def trace_agent_run(self, user_message: str):
 
-    def track_tool_execution(
-        self,
-        tool_name: str,
-        tool_args: Dict[str, Any],
-        execution_time: float,
-        success: bool,
-        error_message: Optional[str] = None
-    ):
-        """Track tool execution using MLflow."""
-        if self.mlflow_tracker:
-            self.mlflow_tracker.log_tool_execution(
-                tool_name=tool_name,
-                tool_args=tool_args,
-                execution_time=execution_time,
-                success=success,
-                error_message=error_message
-            )
+        with self.mlflow_tracker.start_span(
+            name="agent_run",
+            attributes={
+                "span_type": "agent",
+                "session_id": self.session_id,
+                "user_message": user_message[:200],
+            },
+        ):
+            yield
 
-    def track_session_summary(
-        self,
-        total_interactions: int,
-        total_duration: float,
-        total_tools_used: int,
-        success_rate: float
-    ):
-        """Track session summary using MLflow."""
-        if self.mlflow_tracker:
-            self.mlflow_tracker.log_session_summary(
-                session_id=self.session_id,
-                total_interactions=total_interactions,
-                total_duration=total_duration,
-                total_tools_used=total_tools_used,
-                success_rate=success_rate
+    def start_mlflow_run(self, message: str):
+        
+        try:
+            self.mlflow_run = self.mlflow_tracker.start_run(
+                run_name=f"agent-session-{self.session_id}"
             )
+            
+            self.mlflow_tracker.set_tag("session_id", self.session_id)
+            self.mlflow_tracker.set_tag("user_message", message[:200])
+        except Exception as e:
+            print(f"Warning: Failed to start MLflow run: {e}")
+            self.mlflow_run = None
+
+
+    def end_mlflow_run(self):
+
+        if self.mlflow_run:
+            self.mlflow_tracker.end_run()
+            self.mlflow_run = None
 
     def cleanup(self):
         """Cleanup session resources."""
-        if self.mlflow_tracker:
-            self.mlflow_tracker.end_run()
+        self.end_mlflow_run()

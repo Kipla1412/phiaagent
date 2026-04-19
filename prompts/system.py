@@ -238,7 +238,24 @@ def _get_tool_guidelines_section(tools: list[Tool]) -> str:
     regular_tools = [t for t in tools if not t.name.startswith("subagent_")]
     subagent_tools = [t for t in tools if t.name.startswith("subagent_")]
 
-    guidelines = """# Tool Usage Guidelines
+    guidelines = """## Response Format Guidelines
+
+### Structure for Health Insights:
+1. **Key Finding** (1-2 sentences)
+2. **Data Context** (brief summary)
+3. **Recommendation** (1-2 actionable items)
+4. **Disclaimer** (standard medical disclaimer)
+
+### Keep Responses:
+- **Concise**: Maximum 3-4 paragraphs
+- **Actionable**: Focus on practical guidance
+- **Clear**: Use simple, direct language
+- **Safe**: Always include medical disclaimer
+
+### Example Format:
+"Your sleep data shows an average of 7.07 hours per night, which is within the recommended 7-9 hours for adults. Focus on maintaining consistent sleep times and tracking sleep quality alongside duration. This analysis is not medical advice - consult a healthcare provider for persistent sleep concerns."
+
+## Tool Usage Guidelines
 
 You have access to the following tools to accomplish your tasks. Each tool has a JSON schema defining its parameters:
 

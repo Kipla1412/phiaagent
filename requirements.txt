@@ -12,4 +12,4 @@ rich
 click
 duckdb
 fastapi
-
+PyJWT>=2.0.0
